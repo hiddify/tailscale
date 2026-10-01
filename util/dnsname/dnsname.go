@@ -83,6 +83,17 @@ func (f FQDN) NumLabels() int {
 	return strings.Count(f.WithTrailingDot(), ".")
 }
 
+// Parent returns f with its first label removed, or "" if f has no
+// parent (f is root or empty).
+func (f FQDN) Parent() FQDN {
+	s := f.WithTrailingDot()
+	i := strings.IndexByte(s, '.')
+	if i < 0 || i == len(s)-1 {
+		return ""
+	}
+	return FQDN(s[i+1:])
+}
+
 func (f FQDN) Contains(other FQDN) bool {
 	if f == other {
 		return true

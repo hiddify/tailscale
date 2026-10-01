@@ -12,6 +12,7 @@ import (
 	"io"
 	"maps"
 	"math"
+	"net"
 	"net/netip"
 	"reflect"
 	"runtime"
@@ -45,6 +46,7 @@ import (
 	"github.com/sagernet/tailscale/types/key"
 	"github.com/sagernet/tailscale/types/logger"
 	"github.com/sagernet/tailscale/types/netmap"
+	"github.com/sagernet/tailscale/types/nettype"
 	"github.com/sagernet/tailscale/types/views"
 	"github.com/sagernet/tailscale/util/backoff"
 	"github.com/sagernet/tailscale/util/checkchange"
@@ -258,6 +260,57 @@ type Config struct {
 	// LookupHook, if non-nil, overrides DNS resolution for the per-Conn
 	// DERP client and netcheck probes. Mirrors controlclient.Options.LookupHook.
 	LookupHook dnscache.LookupHookFunc
+
+	// PacketListener, if non-nil, overrides how magicsock opens its UDP
+	// sockets (passed through as magicsock.Options.TestOnlyPacketListener,
+	// which despite the name is magicsock's only packet-listener override
+	// hook).
+	PacketListener nettype.PacketListenerWithNetIP
+}
+
+// netPacketListenerFromNetIP adapts a nettype.PacketListenerWithNetIP to
+// nettype.PacketListener, the type magicsock.Options.TestOnlyPacketListener
+// actually takes. The returned nettype.PacketConn is typically a *net.UDPConn
+// under the hood, which already satisfies net.PacketConn directly; when it
+// isn't, netPacketConnAdapter bridges the two method sets.
+func netPacketListenerFromNetIP(ln nettype.PacketListenerWithNetIP) nettype.PacketListener {
+	return netPacketListenerAdapter{ln}
+}
+
+type netPacketListenerAdapter struct {
+	ln nettype.PacketListenerWithNetIP
+}
+
+func (a netPacketListenerAdapter) ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error) {
+	conn, err := a.ln.ListenPacket(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	if pc, ok := conn.(net.PacketConn); ok {
+		return pc, nil
+	}
+	return netPacketConnAdapter{conn}, nil
+}
+
+// netPacketConnAdapter adapts a nettype.PacketConn to net.PacketConn.
+type netPacketConnAdapter struct {
+	nettype.PacketConn
+}
+
+func (a netPacketConnAdapter) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	n, ap, err := a.ReadFromUDPAddrPort(p)
+	if ap.IsValid() {
+		addr = net.UDPAddrFromAddrPort(ap)
+	}
+	return n, addr, err
+}
+
+func (a netPacketConnAdapter) WriteTo(p []byte, addr net.Addr) (n int, err error) {
+	udpAddr, ok := addr.(*net.UDPAddr)
+	if !ok {
+		return 0, fmt.Errorf("netPacketConnAdapter: unsupported address type %T", addr)
+	}
+	return a.WriteToUDPAddrPort(p, udpAddr.AddrPort())
 }
 
 // NewFakeUserspaceEngine returns a new userspace engine for testing.
@@ -428,6 +481,9 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		ControlKnobs:   conf.ControlKnobs,
 		PeerByKeyFunc:  e.PeerByKey,
 		LookupHook:     conf.LookupHook,
+	}
+	if conf.PacketListener != nil {
+		magicsockOpts.TestOnlyPacketListener = netPacketListenerFromNetIP(conf.PacketListener)
 	}
 	if buildfeatures.HasLazyWG {
 		magicsockOpts.NoteRecvActivity = e.noteRecvActivity

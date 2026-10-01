@@ -24,8 +24,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
+	"github.com/sagernet/sing/common/bufio"
+	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/tailscale/client/local"
 	"github.com/sagernet/tailscale/control/controlclient"
@@ -51,6 +54,7 @@ import (
 	"github.com/sagernet/tailscale/net/dnscache"
 	"github.com/sagernet/tailscale/net/memnet"
 	"github.com/sagernet/tailscale/net/netmon"
+	"github.com/sagernet/tailscale/net/netns"
 	"github.com/sagernet/tailscale/net/proxymux"
 	"github.com/sagernet/tailscale/net/socks5"
 	"github.com/sagernet/tailscale/net/tsdial"
@@ -94,6 +98,13 @@ type Server struct {
 	// where the configuration file for logging will be saved at
 	// `Dir/tailscaled.log.conf`.
 	Store ipn.StateStore
+
+	// NetstackMemoryPressure, if set, is a hook the caller can use to
+	// report OOM pressure to the embedded netstack. It is stored but
+	// unused internally by this tailscale version: declared as `any`
+	// so a caller's typed callback (e.g. sing-tun's MemoryPressure) can
+	// be assigned without pulling that package in as a dependency here.
+	NetstackMemoryPressure any
 
 	// Hostname is the hostname to present to the control server.
 	// If empty, the binary name is used.
@@ -148,6 +159,20 @@ type Server struct {
 	TunDevice           wgTun.Device
 	Router              router.Router
 
+	// NetstackHandler, if set, is given any inbound TCP/UDP flow that
+	// doesn't match a registered Listen/ListenPacket on this server,
+	// instead of being dropped.
+	NetstackHandler netstackHandler
+
+	// ControlFunc, if set, overrides the platform-specific socket control
+	// (SO_MARK, SO_BINDTODEVICE, etc.) used for this server's own sockets,
+	// via netns.SetControlFunc.
+	ControlFunc func(network, address string, conn syscall.RawConn) error
+
+	// ListenPacketFunc, if set, overrides how magicsock opens its UDP
+	// sockets.
+	ListenPacketFunc func(ctx context.Context, network, address string) (nettype.PacketConn, error)
+
 	getCertForTesting func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 
 	initOnce         sync.Once
@@ -189,6 +214,21 @@ type Server struct {
 // is non-nil: if nil, the connection is rejected. If non-nil, handler takes
 // over the TCP conn.
 type FallbackTCPHandler func(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool)
+
+// netstackHandler receives any inbound TCP/UDP flow that doesn't match a
+// registered Listen/ListenPacket on this server, as a last resort before
+// the flow is dropped.
+type netstackHandler interface {
+	N.TCPConnectionHandlerEx
+	N.UDPConnectionHandlerEx
+}
+
+// packetListenerFunc adapts a plain function to nettype.PacketListenerWithNetIP.
+type packetListenerFunc func(ctx context.Context, network, address string) (nettype.PacketConn, error)
+
+func (f packetListenerFunc) ListenPacket(ctx context.Context, network, address string) (nettype.PacketConn, error) {
+	return f(ctx, network, address)
+}
 
 // Dial connects to the address on the tailnet.
 // It will start the server if it has not been started yet.
@@ -599,6 +639,9 @@ func (s *Server) start() (reterr error) {
 	}
 	closePool.add(s.netMon)
 
+	if s.ControlFunc != nil {
+		netns.SetControlFunc(s.ControlFunc)
+	}
 	s.dialer = &tsdial.Dialer{Logf: tsLogf, Dialer: s.Dialer} // mutated below (before used)
 	s.dialer.SetBus(sys.Bus.Get())
 	engineConfig := wgengine.Config{
@@ -612,6 +655,9 @@ func (s *Server) start() (reterr error) {
 		HealthTracker: sys.HealthTracker.Get(),
 		Metrics:       sys.UserMetricsRegistry(),
 		LookupHook:    s.LookupHook,
+	}
+	if s.ListenPacketFunc != nil {
+		engineConfig.PacketListener = packetListenerFunc(s.ListenPacketFunc)
 	}
 	if s.TunDevice != nil {
 		engineConfig.Tun = s.TunDevice
@@ -947,12 +993,18 @@ func (s *Server) getTCPHandlerForFlow(src, dst netip.AddrPort) (handler func(net
 	ln, ok := s.listenerForDstAddr("tcp", dst, false)
 	if !ok {
 		s.mu.Lock()
-		defer s.mu.Unlock()
 		for _, handler := range s.fallbackTCPHandlers {
 			connHandler, intercept := handler(src, dst)
 			if intercept {
+				s.mu.Unlock()
 				return connHandler, intercept
 			}
+		}
+		s.mu.Unlock()
+		if s.NetstackHandler != nil {
+			return func(conn net.Conn) {
+				s.NetstackHandler.NewConnectionEx(context.Background(), conn, M.SocksaddrFromNetIP(src), M.SocksaddrFromNetIP(dst), nil)
+			}, true
 		}
 		return nil, true // don't handle, don't forward to localhost
 	}
@@ -962,6 +1014,11 @@ func (s *Server) getTCPHandlerForFlow(src, dst netip.AddrPort) (handler func(net
 func (s *Server) getUDPHandlerForFlow(src, dst netip.AddrPort) (handler func(nettype.ConnPacketConn), intercept bool) {
 	ln, ok := s.listenerForDstAddr("udp", dst, false)
 	if !ok {
+		if s.NetstackHandler != nil {
+			return func(c nettype.ConnPacketConn) {
+				s.NetstackHandler.NewPacketConnectionEx(context.Background(), bufio.NewPacketConn(c), M.SocksaddrFromNetIP(src), M.SocksaddrFromNetIP(dst), nil)
+			}, true
+		}
 		return nil, true // don't handle, don't forward to localhost
 	}
 	return func(c nettype.ConnPacketConn) { ln.handle(c) }, true
