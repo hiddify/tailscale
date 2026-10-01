@@ -1,6 +1,6 @@
 module github.com/sagernet/tailscale
 
-go 1.24.1
+go 1.26
 
 require (
 	fyne.io/systray v1.11.1-0.20250812065214-4856ac3adc3c
@@ -19,7 +19,7 @@ require (
 	github.com/fogleman/gg v1.3.0
 	github.com/fxamacker/cbor/v2 v2.7.0
 	github.com/gaissmai/bart v0.18.0
-	github.com/go-json-experiment/json v0.0.0-20250813024750-ebf49471dced
+	github.com/go-json-experiment/json v0.0.0-20260820222146-c27c302e5fc3
 	github.com/go-ole/go-ole v1.3.0
 	github.com/godbus/dbus/v5 v5.1.1-0.20230522191255-76236955d466
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da

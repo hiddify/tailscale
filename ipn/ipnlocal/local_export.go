@@ -3,6 +3,7 @@ package ipnlocal
 import (
 	"sync/atomic"
 
+	"github.com/sagernet/tailscale/types/netmap"
 	"github.com/sagernet/tailscale/wgengine"
 	"github.com/sagernet/tailscale/wgengine/filter"
 )
@@ -13,6 +14,10 @@ func (b *LocalBackend) ExportFilter() *atomic.Pointer[filter.Filter] {
 
 func (b *LocalBackend) ExportEngine() wgengine.Engine {
 	return b.e
+}
+
+func (b *LocalBackend) NetMapNoPeers() *netmap.NetworkMap {
+	return b.NetMap()
 }
 
 func (b *LocalBackend) SetExternalSSHHostKeys(keys []string) {
