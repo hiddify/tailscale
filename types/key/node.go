@@ -87,6 +87,17 @@ func (k NodePrivate) IsZero() bool {
 	return k.Equal(NodePrivate{})
 }
 
+// Raw32 returns the key, encoded as a raw 32 bytes.
+//
+// Deprecated: this is a transitional method to help us remove
+// golang.zx2c4.com/wireguard/device from this repo. We should not add more
+// callers of this method; if we do, that increases the number of callers
+// we'll need to fix at once when we remove the dependency on that package
+// (and its device.NoisePrivateKey type) in the future.
+func (k NodePrivate) Raw32() [32]byte {
+	return k.k
+}
+
 // Equal reports whether k and other are the same key.
 func (k NodePrivate) Equal(other NodePrivate) bool {
 	return subtle.ConstantTimeCompare(k.k[:], other.k[:]) == 1

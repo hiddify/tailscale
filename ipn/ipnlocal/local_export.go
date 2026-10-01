@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 
 	"github.com/sagernet/tailscale/net/dns/resolver"
+	"github.com/sagernet/tailscale/tailcfg"
 	"github.com/sagernet/tailscale/types/netmap"
 	"github.com/sagernet/tailscale/version"
 	"github.com/sagernet/tailscale/wgengine"
@@ -41,6 +42,16 @@ func (b *LocalBackend) ExportMagicDNSHosts() resolver.MagicDNSHosts {
 		return nil
 	}
 	return resolver.MagicDNSHosts(dcfg.Hosts)
+}
+
+// ExportSelf returns the current node's own NodeView from the netmap.
+func (b *LocalBackend) ExportSelf() tailcfg.NodeView {
+	return b.currentNode().Self()
+}
+
+// ExportPeers returns the current peers from the netmap.
+func (b *LocalBackend) ExportPeers() []tailcfg.NodeView {
+	return b.currentNode().Peers()
 }
 
 func (b *LocalBackend) SetExternalSSHHostKeys(keys []string) {

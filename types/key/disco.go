@@ -42,6 +42,16 @@ func NewDisco() DiscoPrivate {
 	return ret
 }
 
+// DiscoPrivateFromRaw32 parses a 32-byte raw value as a DiscoPrivate key.
+// The caller is responsible for ensuring that raw contains random data or
+// that b never escapes to attacker-visible timing.
+func DiscoPrivateFromRaw32(raw mem.RO) DiscoPrivate {
+	var ret DiscoPrivate
+	raw.Copy(ret.k[:])
+	clamp25519Private(ret.k[:])
+	return ret
+}
+
 // IsZero reports whether k is the zero value.
 func (k DiscoPrivate) IsZero() bool {
 	return k.Equal(DiscoPrivate{})
