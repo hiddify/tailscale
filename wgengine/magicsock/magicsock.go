@@ -164,6 +164,7 @@ type Conn struct {
 	idleFunc               func() time.Duration // nil means unknown
 	testOnlyPacketListener nettype.PacketListener
 	noteRecvActivity       func(key.NodePublic) // or nil, see Options.NoteRecvActivity
+	onDERPRecv             func(regionID int, source key.NodePublic, packet []byte) bool // or nil, see Options.OnDERPRecv
 	netMon                 *netmon.Monitor      // must be non-nil
 	health                 *health.Tracker      // or nil
 	controlKnobs           *controlknobs.Knobs  // or nil
@@ -463,6 +464,21 @@ type Options struct {
 	// Only used by tests.
 	TestOnlyPacketListener nettype.PacketListener
 
+	// OnDERPRecv, if non-nil, is called with every raw packet received over
+	// DERP before any disco or WireGuard processing, with the DERP region
+	// it arrived on, the sender's node key, and the packet bytes. If it
+	// returns true, the packet is considered fully handled and magicsock
+	// does not process it further (no disco dispatch, no delivery to
+	// WireGuard).
+	OnDERPRecv func(regionID int, source key.NodePublic, packet []byte) bool
+
+	// ForceDiscoKey, if non-zero, overrides the random disco key newConn
+	// would otherwise generate. Must be set before any peers are
+	// registered; there is no supported way to change it after NewConn
+	// returns other than the existing RotateDiscoKey (which generates a
+	// new random key, not a chosen one).
+	ForceDiscoKey key.DiscoPrivate
+
 	// NoteRecvActivity, if provided, is a func for magicsock to call
 	// whenever it receives a packet from a a peer if it's been more
 	// than ~10 seconds since the last one. (10 seconds is somewhat
@@ -687,6 +703,9 @@ func NewConn(opts Options) (*Conn, error) {
 	}
 
 	c := newConn(opts.logf())
+	if !opts.ForceDiscoKey.IsZero() {
+		c.discoAtomic.Set(opts.ForceDiscoKey)
+	}
 	c.eventBus = opts.EventBus
 	c.port.Store(uint32(opts.Port))
 	c.controlKnobs = opts.ControlKnobs
@@ -695,6 +714,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.idleFunc = opts.IdleFunc
 	c.testOnlyPacketListener = opts.TestOnlyPacketListener
 	c.noteRecvActivity = opts.NoteRecvActivity
+	c.onDERPRecv = opts.OnDERPRecv
 
 	// Set up publishers and subscribers. Subscribe calls must return before
 	// NewConn otherwise published events can be missed.

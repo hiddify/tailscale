@@ -266,6 +266,19 @@ type Config struct {
 	// which despite the name is magicsock's only packet-listener override
 	// hook).
 	PacketListener nettype.PacketListenerWithNetIP
+
+	// OnDERPRecv, if non-nil, is passed through to
+	// magicsock.Options.OnDERPRecv.
+	OnDERPRecv func(regionID int, source key.NodePublic, packet []byte) bool
+
+	// DERPAppName, if set, identifies the calling application for DERP
+	// telemetry purposes. Unused by this tailscale version: this version's
+	// DERP client has no app-name/user-agent concept to attach it to.
+	DERPAppName string
+
+	// ForceDiscoKey, if non-zero, is passed through to
+	// magicsock.Options.ForceDiscoKey.
+	ForceDiscoKey key.DiscoPrivate
 }
 
 // netPacketListenerFromNetIP adapts a nettype.PacketListenerWithNetIP to
@@ -481,6 +494,8 @@ func NewUserspaceEngine(logf logger.Logf, conf Config) (_ Engine, reterr error) 
 		ControlKnobs:   conf.ControlKnobs,
 		PeerByKeyFunc:  e.PeerByKey,
 		LookupHook:     conf.LookupHook,
+		OnDERPRecv:     conf.OnDERPRecv,
+		ForceDiscoKey:  conf.ForceDiscoKey,
 	}
 	if conf.PacketListener != nil {
 		magicsockOpts.TestOnlyPacketListener = netPacketListenerFromNetIP(conf.PacketListener)

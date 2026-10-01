@@ -695,6 +695,10 @@ func (c *Conn) processDERPReadResult(dm derpReadResult, b []byte) (n int, ep *en
 		return 0, nil
 	}
 
+	if c.onDERPRecv != nil && c.onDERPRecv(regionID, dm.src, b[:n]) {
+		return 0, nil
+	}
+
 	srcAddr := epAddr{ap: netip.AddrPortFrom(tailcfg.DerpMagicIPAddr, uint16(regionID))}
 	pt, isGeneveEncap := packetLooksLike(b[:n])
 	if pt == packetLooksLikeDisco &&
