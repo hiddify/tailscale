@@ -1,6 +1,6 @@
 module github.com/sagernet/tailscale
 
-go 1.24.1
+go 1.26
 
 require (
 	fyne.io/systray v1.11.1-0.20250812065214-4856ac3adc3c
@@ -19,7 +19,7 @@ require (
 	github.com/fogleman/gg v1.3.0
 	github.com/fxamacker/cbor/v2 v2.7.0
 	github.com/gaissmai/bart v0.18.0
-	github.com/go-json-experiment/json v0.0.0-20250813024750-ebf49471dced
+	github.com/go-json-experiment/json v0.0.0-20260820222146-c27c302e5fc3
 	github.com/go-ole/go-ole v1.3.0
 	github.com/godbus/dbus/v5 v5.1.1-0.20230522191255-76236955d466
 	github.com/golang/groupcache v0.0.0-20210331224755-41bb18bfe9da
@@ -48,7 +48,7 @@ require (
 	github.com/safchain/ethtool v0.3.0
 	github.com/sagernet/gvisor v0.0.0-20250811.0-sing-box-mod.1
 	github.com/sagernet/sing v0.7.13
-	github.com/sagernet/wireguard-go v0.0.2-beta.1.0.20250917110311-16510ac47288
+	github.com/sagernet/wireguard-go v0.0.4
 	github.com/tailscale/certstore v0.1.1-0.20231202035212-d3fa0460f47e
 	github.com/tailscale/goupnp v1.0.1-0.20210804011211-c64d0f06ea05
 	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a

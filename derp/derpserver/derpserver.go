@@ -179,6 +179,7 @@ type Server struct {
 	verifyClientHTTPClient       []*http.Client
 	verifyClientsURL             []string
 	verifyClientsURLFailOpen     bool
+	verifyClientKeys             []key.NodePublic
 
 	mu       syncs.Mutex
 	closed   bool
@@ -497,6 +498,12 @@ func (s *Server) SetVerifyClientURL(v []string) {
 // admission controller URL is unreachable.
 func (s *Server) SetVerifyClientURLFailOpen(v bool) {
 	s.verifyClientsURLFailOpen = v
+}
+
+// SetVerifyClientKeys sets a static allowlist of client node keys that are
+// always accepted, independent of any other verification method.
+func (s *Server) SetVerifyClientKeys(keys []key.NodePublic) {
+	s.verifyClientKeys = keys
 }
 
 // SetTailscaledSocketPath sets the unix socket path to use to talk to
@@ -1385,6 +1392,13 @@ func (s *Server) verifyClient(ctx context.Context, clientKey key.NodePublic, inf
 		// further wouldn't work: it's not part of the tailnet so tailscaled and
 		// likely the admission control URL wouldn't know about it.
 		return nil
+	}
+
+	// static key allowlist verification:
+	for _, allowed := range s.verifyClientKeys {
+		if allowed == clientKey {
+			return nil
+		}
 	}
 
 	// tailscaled-based verification:

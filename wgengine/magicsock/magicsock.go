@@ -33,6 +33,7 @@ import (
 	"github.com/sagernet/tailscale/hostinfo"
 	"github.com/sagernet/tailscale/ipn/ipnstate"
 	"github.com/sagernet/tailscale/net/batching"
+	"github.com/sagernet/tailscale/net/dnscache"
 	"github.com/sagernet/tailscale/net/netcheck"
 	"github.com/sagernet/tailscale/net/neterror"
 	"github.com/sagernet/tailscale/net/netmon"
@@ -163,6 +164,7 @@ type Conn struct {
 	idleFunc               func() time.Duration // nil means unknown
 	testOnlyPacketListener nettype.PacketListener
 	noteRecvActivity       func(key.NodePublic) // or nil, see Options.NoteRecvActivity
+	onDERPRecv             func(regionID int, source key.NodePublic, packet []byte) bool // or nil, see Options.OnDERPRecv
 	netMon                 *netmon.Monitor      // must be non-nil
 	health                 *health.Tracker      // or nil
 	controlKnobs           *controlknobs.Knobs  // or nil
@@ -199,6 +201,12 @@ type Conn struct {
 	// netChecker is the prober that discovers local network
 	// conditions, including the closest DERP relay and NAT mappings.
 	netChecker *netcheck.Client
+
+	// dnsCache resolves DERP hostnames for both the per-Conn DERP client
+	// and netChecker. It is the dnscache.Get() singleton when no
+	// Options.LookupHook is provided, otherwise a per-Conn Resolver that
+	// honors the hook.
+	dnsCache *dnscache.Resolver
 
 	// portMapper is the NAT-PMP/PCP/UPnP prober/client, for requesting
 	// port mappings from NAT devices.
@@ -456,6 +464,21 @@ type Options struct {
 	// Only used by tests.
 	TestOnlyPacketListener nettype.PacketListener
 
+	// OnDERPRecv, if non-nil, is called with every raw packet received over
+	// DERP before any disco or WireGuard processing, with the DERP region
+	// it arrived on, the sender's node key, and the packet bytes. If it
+	// returns true, the packet is considered fully handled and magicsock
+	// does not process it further (no disco dispatch, no delivery to
+	// WireGuard).
+	OnDERPRecv func(regionID int, source key.NodePublic, packet []byte) bool
+
+	// ForceDiscoKey, if non-zero, overrides the random disco key newConn
+	// would otherwise generate. Must be set before any peers are
+	// registered; there is no supported way to change it after NewConn
+	// returns other than the existing RotateDiscoKey (which generates a
+	// new random key, not a chosen one).
+	ForceDiscoKey key.DiscoPrivate
+
 	// NoteRecvActivity, if provided, is a func for magicsock to call
 	// whenever it receives a packet from a a peer if it's been more
 	// than ~10 seconds since the last one. (10 seconds is somewhat
@@ -492,6 +515,11 @@ type Options struct {
 	// DisablePortMapper, if true, disables the portmapper.
 	// This is primarily useful in tests.
 	DisablePortMapper bool
+
+	// LookupHook, if non-nil, customizes DNS resolution for the per-Conn
+	// DERP client and the embedded netcheck client. When nil, the
+	// process-wide dnscache.Get() singleton is used (historic behavior).
+	LookupHook dnscache.LookupHookFunc
 }
 
 func (o *Options) logf() logger.Logf {
@@ -675,6 +703,9 @@ func NewConn(opts Options) (*Conn, error) {
 	}
 
 	c := newConn(opts.logf())
+	if !opts.ForceDiscoKey.IsZero() {
+		c.discoAtomic.Set(opts.ForceDiscoKey)
+	}
 	c.eventBus = opts.EventBus
 	c.port.Store(uint32(opts.Port))
 	c.controlKnobs = opts.ControlKnobs
@@ -683,6 +714,7 @@ func NewConn(opts Options) (*Conn, error) {
 	c.idleFunc = opts.IdleFunc
 	c.testOnlyPacketListener = opts.TestOnlyPacketListener
 	c.noteRecvActivity = opts.NoteRecvActivity
+	c.onDERPRecv = opts.OnDERPRecv
 
 	// Set up publishers and subscribers. Subscribe calls must return before
 	// NewConn otherwise published events can be missed.
@@ -729,6 +761,17 @@ func NewConn(opts Options) (*Conn, error) {
 	c.health = opts.HealthTracker
 	c.getPeerByKey = opts.PeerByKeyFunc
 
+	if opts.LookupHook != nil {
+		c.dnsCache = &dnscache.Resolver{
+			Forward:     dnscache.Get().Forward,
+			UseLastGood: true,
+			Logf:        c.logf,
+			LookupHook:  opts.LookupHook,
+		}
+	} else {
+		c.dnsCache = dnscache.Get()
+	}
+
 	if err := c.rebind(keepCurrentPort); err != nil {
 		return nil, err
 	}
@@ -740,6 +783,12 @@ func NewConn(opts Options) (*Conn, error) {
 		SkipExternalNetwork: inTest(),
 		PortMapper:          c.portMapper,
 		UseDNSCache:         true,
+	}
+	if opts.LookupHook != nil {
+		// Share the per-Conn resolver so netcheck's DNS lookups also
+		// honor the hook. When unset, netcheck keeps its historic
+		// lazily-constructed resolver (Forward: net.DefaultResolver).
+		c.netChecker.Resolver = c.dnsCache
 	}
 
 	c.metrics = registerMetrics(opts.Metrics)
@@ -1471,6 +1520,10 @@ func (c *Conn) LocalPort() uint16 {
 var errNetworkDown = errors.New("magicsock: network down")
 
 func (c *Conn) networkDown() bool { return !c.networkUp.Load() }
+
+func (c *Conn) SendWithoutModify(buffs [][]byte, ep conn.Endpoint, offset int) (err error) {
+	return c.Send(buffs, ep, offset)
+}
 
 // Send implements conn.Bind.
 //
